@@ -1,22 +1,48 @@
-Subject: [PATCH] soc: qcom: pmic_glink_altmode: notify HPD on non-DP detach
+Subject: [PATCH] soc: qcom: pmic_glink_altmode: notify a tracked DP detach
 
-The NO_CONN branch for notifications without a DisplayPort SVID switches
-routing to safe mode but does not notify the HPD bridge. Report a
-disconnected status in that branch, as the DP branch already does for
-HPD deassertion.
+Track whether the worker last reported a connected DP display. For a
+non-DP NO_CONN notification, report disconnection only if DP was reported
+connected and the cable orientation is NONE. Clear the tracked state so
+repeated detach notifications do not emit additional HPD events.
 
-This is a candidate for the Odin 3 suspend/undock issue. The triggering
-notification and recovery still require hardware validation.
+This avoids adding disconnect notifications at startup or after an
+already reported DP disconnect, unlike the reverted unconditional patch.
+Keep the existing DP-SVID path and mux/retimer ordering unchanged.
+
+Experimental Odin 3 suspend/undock candidate. The previous unconditional
+variant broke docking. Firmware traces have not established the cause or
+confirmed that the failing resume reaches this guarded branch. This does
+not address lost notifications or display resume ordering.
 
 ---
 --- a/drivers/soc/qcom/pmic_glink_altmode.c
 +++ b/drivers/soc/qcom/pmic_glink_altmode.c
-@@ -384,6 +384,8 @@
+@@ -121,6 +121,7 @@
+ 	u8 hpd_state;
+ 	u8 hpd_irq;
+ 	u8 mux_ctrl;
++	bool dp_connected;
+ };
+ 
+ #define work_to_altmode(w) container_of((w), struct pmic_glink_altmode, enable_work)
+@@ -375,6 +376,7 @@
+ 			conn_status = connector_status_disconnected;
+ 
+ 		drm_aux_hpd_bridge_notify(&alt_port->bridge->dev, conn_status);
++		alt_port->dp_connected = conn_status == connector_status_connected;
+ 	} else if (alt_port->mux_ctrl == MUX_CTRL_STATE_TUNNELING) {
+ 		if (alt_port->svid == USB_TYPEC_TBT_SID)
+ 			pmic_glink_altmode_enable_tbt(altmode, alt_port);
+@@ -384,6 +386,12 @@
  		pmic_glink_altmode_enable_usb(altmode, alt_port);
  	} else if (alt_port->mux_ctrl == MUX_CTRL_STATE_NO_CONN) {
  		pmic_glink_altmode_safe(altmode, alt_port);
-+		drm_aux_hpd_bridge_notify(&alt_port->bridge->dev,
-+					  connector_status_disconnected);
++		if (alt_port->dp_connected &&
++		    alt_port->orientation == TYPEC_ORIENTATION_NONE) {
++			drm_aux_hpd_bridge_notify(&alt_port->bridge->dev,
++						  connector_status_disconnected);
++			alt_port->dp_connected = false;
++		}
  	} else {
  		dev_err(altmode->dev, "Got unknown mux_ctrl: %u on port %u, forcing safe mode\n",
  			alt_port->mux_ctrl, alt_port->index);
