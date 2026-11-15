@@ -1,0 +1,22 @@
+Subject: [PATCH] soc: qcom: pmic_glink_altmode: notify HPD on non-DP detach
+
+The NO_CONN branch for notifications without a DisplayPort SVID switches
+routing to safe mode but does not notify the HPD bridge. Report a
+disconnected status in that branch, as the DP branch already does for
+HPD deassertion.
+
+This is a candidate for the Odin 3 suspend/undock issue. The triggering
+notification and recovery still require hardware validation.
+
+---
+--- a/drivers/soc/qcom/pmic_glink_altmode.c
++++ b/drivers/soc/qcom/pmic_glink_altmode.c
+@@ -384,6 +384,8 @@
+ 		pmic_glink_altmode_enable_usb(altmode, alt_port);
+ 	} else if (alt_port->mux_ctrl == MUX_CTRL_STATE_NO_CONN) {
+ 		pmic_glink_altmode_safe(altmode, alt_port);
++		drm_aux_hpd_bridge_notify(&alt_port->bridge->dev,
++					  connector_status_disconnected);
+ 	} else {
+ 		dev_err(altmode->dev, "Got unknown mux_ctrl: %u on port %u, forcing safe mode\n",
+ 			alt_port->mux_ctrl, alt_port->index);
